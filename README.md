@@ -127,6 +127,8 @@ Language is detected automatically — no manual switching needed.
 
 ---
 
-### License
+### Known Limitations
 
-MIT — see [LICENSE](LICENSE)
+- moeDict requires at least two characters for lookup (API limitation)
+- Rich English lookup is slower due to multiple translation API calls
+- Requires internet access; no offline mode
