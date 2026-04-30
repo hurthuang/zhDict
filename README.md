@@ -124,7 +124,6 @@ Language is detected automatically — no manual switching needed.
 
 > **Note**: The Google Translate endpoint is unofficial and may stop working in the future.
 
-
 ---
 
 ### Known Limitations
@@ -132,3 +131,9 @@ Language is detected automatically — no manual switching needed.
 - moeDict requires at least two characters for lookup (API limitation)
 - Rich English lookup is slower due to multiple translation API calls
 - Requires internet access; no offline mode
+
+---
+
+### License
+
+MIT — see [LICENSE](LICENSE)
