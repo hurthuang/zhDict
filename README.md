@@ -27,7 +27,7 @@ zhDict 是一個 [NVDA](https://www.nvaccess.org/) 螢幕閱讀器的附加元�
 
 ### 安裝
 
-1. 至 [Releases](https://github.com/hurt/zhDict/releases) 下載最新的 `.nvda-addon` 檔案
+1. 至 [Releases](https://github.com/hurthuang/zhDict/releases) 下載最新的 `.nvda-addon` 檔案
 2. 直接雙擊該檔案，NVDA 會提示安裝
 3. 重新啟動 NVDA 後即可使用
 
@@ -92,7 +92,7 @@ Language is detected automatically — no manual switching needed.
 
 ### Installation
 
-1. Download the latest `.nvda-addon` file from [Releases](https://github.com/hurt/zhDict/releases)
+1. Download the latest `.nvda-addon` file from [Releases](https://github.com/hurthuang/zhDict/releases)
 2. Double-click the file; NVDA will prompt you to install it
 3. Restart NVDA
 
@@ -137,3 +137,4 @@ Language is detected automatically — no manual switching needed.
 ### License
 
 MIT — see [LICENSE](LICENSE)
+
