@@ -15,6 +15,10 @@ import json
 import re
 import unicodedata
 import wx
+from scriptHandler import script
+import addonHandler
+
+addonHandler.initTranslation()
 
 # ── API 設定 ──────────────────────────────────────────────
 MOEDICT_API  = "https://www.moedict.tw/a/{}.json"
@@ -336,10 +340,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     scriptCategory = "國語字典與翻譯"
 
+    @script(
+        description="基本查詢：中文查注音＋第一條釋義；英文查譯名＋音標＋第一條定義",
+        category="國語字典與翻譯",
+        gesture="kb:alt+NVDA+k",
+    )
     def script_queryBasic(self, gesture):
         """基本查詢：中文查注音＋第一條釋義；英文查譯名＋音標＋第一條定義"""
         self._query(rich=False)
 
+    @script(
+        description="豐富查詢：中文查完整字典；英文查完整字典含例句、同反義詞",
+        category="國語字典與翻譯",
+        gesture="kb:alt+shift+NVDA+k",
+    )
     def script_queryRich(self, gesture):
         """豐富查詢：中文查完整字典；英文查完整字典含例句、同反義詞"""
         self._query(rich=True)
@@ -390,8 +404,3 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             return
         ui.message(f"查詢：{word[:10]}{'…' if len(word) > 10 else ''}")
         threading.Thread(target=_query_worker, args=(word, rich), daemon=True).start()
-
-    __gestures = {
-        "kb:alt+NVDA+k":       "queryBasic",
-        "kb:alt+shift+NVDA+k": "queryRich",
-    }
