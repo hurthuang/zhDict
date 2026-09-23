@@ -47,6 +47,9 @@ zhDict 是一個 [NVDA](https://www.nvaccess.org/) 螢幕閱讀器的附加元�
 
 > 熱鍵可在 NVDA 偏好設定 → 按鍵手勢 → **國語字典與翻譯** 中自訂。
 
+**自動檢查更新：**
+NVDA 啟動時會在背景自動檢查一次是否有新版本，若有才會跳出可瀏覽對話框顯示下載頁面連結；已是最新版本則不會有任何提示。
+
 ---
 
 ### 資料來源
@@ -111,6 +114,9 @@ Language is detected automatically — no manual switching needed.
 3. Results appear in a browseable dialog; navigate with arrow keys; closes automatically when focus leaves
 
 > Hotkeys can be reassigned in NVDA Preferences → Input Gestures → **Dictionary & Translation**.
+
+**Automatic update check:**
+On NVDA startup, zhDict checks GitHub in the background for a newer release. A browseable dialog with the download link only appears if an update is actually available; otherwise it stays silent.
 
 ---
 

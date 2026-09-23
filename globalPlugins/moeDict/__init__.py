@@ -28,6 +28,7 @@ GTRANS_API   = (
     "https://translate.googleapis.com/translate_a/single"
     "?client=gtx&sl=auto&tl=zh-TW&dt=t&q={}"
 )
+GITHUB_LATEST_API = "https://api.github.com/repos/hurthuang/zhDict/releases/latest"
 TIMEOUT = 10
 TRANSLATE_TIMEOUT = 5  # 翻譯每次呼叫的逾時要短，避免豐富查詢因單次翻譯卡住而整體拖很久
 
@@ -324,6 +325,42 @@ def _fetch_english(word, rich=False):
 
     return "\n".join(lines)
 
+# ── 檢查更新 ──────────────────────────────────────────────
+def _parse_version(v):
+    nums = [int(p) for p in re.findall(r'\d+', v)]
+    nums += [0] * (4 - len(nums))
+    return tuple(nums[:4])
+
+def _current_version():
+    try:
+        return addonHandler.getCodeAddon().manifest.get("version", "0")
+    except Exception:
+        return "0"
+
+def _check_update_worker(silent=False):
+    """silent=True 用於開機自動檢查：沒有新版本時完全不提示，避免每次啟動都念一次。"""
+    current = _current_version()
+    req = urllib.request.Request(
+        GITHUB_LATEST_API,
+        headers={**_BROWSER_HEADERS, "Accept": "application/vnd.github+json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        if not silent:
+            wx.CallAfter(ui.message, f"檢查更新失敗：{e}")
+        return
+
+    latest = data.get("tag_name", "").lstrip("vV")
+    url = data.get("html_url", "https://github.com/hurthuang/zhDict/releases")
+
+    if _parse_version(latest) > _parse_version(current):
+        msg = f"有新版本可更新：v{latest}（目前使用：v{current}）\n\n下載頁面：\n{url}"
+        wx.CallAfter(ui.browseableMessage, msg, "zhDict 有新版本")
+    elif not silent:
+        wx.CallAfter(ui.message, f"目前已是最新版本（v{current}）。")
+
 # ── 背景查詢 ──────────────────────────────────────────────
 def _query_worker(word, rich):
     is_zh = _is_chinese(word)
@@ -351,6 +388,13 @@ def _query_worker(word, rich):
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     scriptCategory = "國語字典與翻譯"
+
+    def __init__(self):
+        super().__init__()
+        # 啟動時背景自動檢查一次更新，延遲幾秒避免搶在 NVDA 啟動流程前面；有新版才提示，沒有則靜默
+        wx.CallLater(5000, lambda: threading.Thread(
+            target=_check_update_worker, kwargs={"silent": True}, daemon=True
+        ).start())
 
     @script(
         description="基本查詢：中文查注音＋第一條釋義；英文查譯名＋音標＋第一條定義",
