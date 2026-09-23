@@ -272,6 +272,8 @@ def _fetch_english(word, rich=False):
                     lines.append(f"  • {s}")
                 return "\n".join(lines)
             return f"「{word}」查無此詞，請確認拼字。"
+        if e.code >= 500:
+            return f"英文字典服務目前無法連線（伺服器錯誤 {e.code}），並非網路問題，請稍後再試。"
         raise
 
     lines = [f"【{word}】"]
@@ -324,8 +326,10 @@ def _fetch_english(word, rich=False):
 
 # ── 背景查詢 ──────────────────────────────────────────────
 def _query_worker(word, rich):
+    is_zh = _is_chinese(word)
+    source = "國語字典" if is_zh else "英文字典"
     try:
-        if _is_chinese(word):
+        if is_zh:
             result = _fetch_moedict(word, rich=rich)
             title = f"國語字典：{word}"
         else:
@@ -335,7 +339,7 @@ def _query_worker(word, rich):
         result = f"網路連線失敗：{e.reason}"
         title = "查詢失敗"
     except TimeoutError:
-        result = "查詢逾時，請確認網路連線後再試一次。"
+        result = f"{source}服務逾時，可能是服務端忙線或故障（並非你的網路問題），請稍後再試。"
         title = "查詢逾時"
     except Exception as e:
         result = f"發生錯誤：{e}"
