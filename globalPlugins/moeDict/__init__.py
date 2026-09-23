@@ -282,23 +282,32 @@ def _fetch_moedict(word, rich=False):
 
 # ── 英文字典查詢（Wiktionary，Free Dictionary API 長期無法連線後改用）──
 def _fetch_english(word, rich=False):
-    url = WIKTIONARY_API.format(urllib.parse.quote(word.lower(), safe=""))
-    req = urllib.request.Request(url, headers=_BROWSER_HEADERS)
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            suggestions = _spell_suggest(word)
-            if suggestions:
-                lines = [f"「{word}」查無此詞，您是否要查："]
-                for s in suggestions:
-                    lines.append(f"  • {s}")
-                return "\n".join(lines)
-            return f"「{word}」查無此詞，請確認拼字。"
-        if e.code >= 500:
-            return f"英文字典服務目前無法連線（伺服器錯誤 {e.code}），並非網路問題，請稍後再試。"
-        raise
+    # Wiktionary 頁面大小寫敏感（UI ≠ ui、NASA ≠ nasa），先試原本大小寫，
+    # 查無此詞再退回全小寫（句首被選取而大寫的一般單字，例如 Hello，得靠這步才查得到）。
+    candidates = [word] if word.lower() == word else [word, word.lower()]
+    data = None
+    for candidate in candidates:
+        url = WIKTIONARY_API.format(urllib.parse.quote(candidate, safe=""))
+        req = urllib.request.Request(url, headers=_BROWSER_HEADERS)
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                continue
+            if e.code >= 500:
+                return f"英文字典服務目前無法連線（伺服器錯誤 {e.code}），並非網路問題，請稍後再試。"
+            raise
+
+    if data is None:
+        suggestions = _spell_suggest(word)
+        if suggestions:
+            lines = [f"「{word}」查無此詞，您是否要查："]
+            for s in suggestions:
+                lines.append(f"  • {s}")
+            return "\n".join(lines)
+        return f"「{word}」查無此詞，請確認拼字。"
 
     entries = data.get("en", [])
     if not entries:
