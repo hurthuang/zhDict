@@ -29,6 +29,7 @@ GTRANS_API   = (
     "?client=gtx&sl=auto&tl=zh-TW&dt=t&q={}"
 )
 TIMEOUT = 10
+TRANSLATE_TIMEOUT = 5  # 翻譯每次呼叫的逾時要短，避免豐富查詢因單次翻譯卡住而整體拖很久
 
 _BROWSER_HEADERS = {
     "User-Agent": (
@@ -145,10 +146,14 @@ def _clean_type(text):
 
 # ── Google 翻譯 ───────────────────────────────────────────
 def _gtranslate(text):
+    """翻譯失敗（逾時、連線錯誤等）時不中斷查詢，直接回傳原文。"""
     url = GTRANS_API.format(urllib.parse.quote(text, safe=""))
     req = urllib.request.Request(url, headers=_BROWSER_HEADERS)
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-        raw = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=TRANSLATE_TIMEOUT) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return text
     if not raw or not raw[0]:
         return text
     return "".join(seg[0] for seg in raw[0] if seg[0]).strip()
@@ -329,6 +334,9 @@ def _query_worker(word, rich):
     except urllib.error.URLError as e:
         result = f"網路連線失敗：{e.reason}"
         title = "查詢失敗"
+    except TimeoutError:
+        result = "查詢逾時，請確認網路連線後再試一次。"
+        title = "查詢逾時"
     except Exception as e:
         result = f"發生錯誤：{e}"
         title = "查詢失敗"
