@@ -15,6 +15,7 @@ import json
 import re
 import os
 import tempfile
+import html
 import unicodedata
 import wx
 import gui
@@ -24,9 +25,9 @@ import addonHandler
 addonHandler.initTranslation()
 
 # ── API 設定 ──────────────────────────────────────────────
-MOEDICT_API  = "https://www.moedict.tw/a/{}.json"
-DICTAPI_URL  = "https://api.dictionaryapi.dev/api/v2/entries/en/{}"
-DATAMUSE_URL = "https://api.datamuse.com/sug?s={}&max=5"
+MOEDICT_API    = "https://www.moedict.tw/a/{}.json"
+WIKTIONARY_API = "https://en.wiktionary.org/api/rest_v1/page/definition/{}"
+DATAMUSE_URL   = "https://api.datamuse.com/sug?s={}&max=5"
 GTRANS_API   = (
     "https://translate.googleapis.com/translate_a/single"
     "?client=gtx&sl=auto&tl=zh-TW&dt=t&q={}"
@@ -148,6 +149,25 @@ def _clean(text):
 def _clean_type(text):
     return text.replace('`', '').replace('\uff40', '').replace('~', '').strip()
 
+# ── Wiktionary 文字清理 ────────────────────────────────────
+_RE_HTML_TAG = re.compile(r'<[^>]+>')
+
+def _strip_html(text):
+    """Wiktionary 釋義/例句是帶 HTML 標籤的字串，先解 entity 再去標籤。"""
+    return _RE_HTML_TAG.sub('', html.unescape(text)).strip()
+
+def _is_stub_definition(text):
+    """Wiktionary 詞條有時只有「本術語需要定義」之類的維護用佔位文字，不是真的釋義。"""
+    return not text or "needs a definition" in text.lower()
+
+def _first_real_definition(entry):
+    """回傳這個詞性條目裡第一個非空、非佔位文字的釋義，找不到回傳 None。"""
+    for d in entry.get("definitions", []):
+        text = _strip_html(d.get("definition", ""))
+        if not _is_stub_definition(text):
+            return text
+    return None
+
 # ── Google 翻譯 ───────────────────────────────────────────
 def _gtranslate(text):
     """翻譯失敗（逾時、連線錯誤等）時不中斷查詢，直接回傳原文。"""
@@ -260,9 +280,9 @@ def _fetch_moedict(word, rich=False):
     result = "\n".join(lines).strip()
     return result if len(result) > len(f"【{word}】") else f"「{word}」查無結果。"
 
-# ── 英文字典查詢 ──────────────────────────────────────────
+# ── 英文字典查詢（Wiktionary，Free Dictionary API 長期無法連線後改用）──
 def _fetch_english(word, rich=False):
-    url = DICTAPI_URL.format(urllib.parse.quote(word.lower(), safe=""))
+    url = WIKTIONARY_API.format(urllib.parse.quote(word.lower(), safe=""))
     req = urllib.request.Request(url, headers=_BROWSER_HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
@@ -280,51 +300,68 @@ def _fetch_english(word, rich=False):
             return f"英文字典服務目前無法連線（伺服器錯誤 {e.code}），並非網路問題，請稍後再試。"
         raise
 
+    entries = data.get("en", [])
+    if not entries:
+        return f"「{word}」查無英文詞條，請確認拼字。"
+
     lines = [f"【{word}】"]
     zh_word = _gtranslate(word)
     if zh_word and zh_word.lower() != word.lower():
         lines.append(f"中文：{zh_word}")
 
-    entry = data[0]
-    for ph in entry.get("phonetics", []):
-        if ph.get("text", "").strip():
-            lines.append(f"音標：{ph['text'].strip()}")
-            break
-
     if not rich:
-        meanings = entry.get("meanings", [])
-        if meanings:
-            m = meanings[0]
-            pos = m.get("partOfSpeech", "")
-            if pos:
-                lines.append(f"詞性：{pos}")
-            defs = m.get("definitions", [])
-            if defs:
-                en_def = defs[0].get("definition", "")
-                zh_def = _gtranslate(en_def)
-                lines.append(f"釋義：{zh_def}")
+        # Symbol／Letter 條目常是 ISO 代碼、字母名稱之類的冷知識；有些條目只有
+        # 「本術語需要定義」的佔位文字。優先找一個詞性正常、且有實質釋義的條目。
+        candidates = [e for e in entries if e.get("partOfSpeech") not in ("Symbol", "Letter")] or entries
+        entry, en_def = None, None
+        for e in candidates:
+            d = _first_real_definition(e)
+            if d:
+                entry, en_def = e, d
+                break
+        if entry is None:
+            for e in entries:
+                d = _first_real_definition(e)
+                if d:
+                    entry, en_def = e, d
+                    break
+        if entry is None:
+            return f"「{word}」查無可用釋義。"
+        pos = entry.get("partOfSpeech", "")
+        if pos:
+            lines.append(f"詞性：{pos}")
+        zh_def = _gtranslate(en_def)
+        lines.append(f"釋義：{zh_def}")
     else:
-        for meaning in entry.get("meanings", []):
-            pos = meaning.get("partOfSpeech", "")
-            lines.append(f"\n【{pos}】")
-            for i, d in enumerate(meaning.get("definitions", [])[:4], 1):
-                en_def  = d.get("definition", "")
-                zh_def  = _gtranslate(en_def) if en_def else ""
-                example = d.get("example", "")
-                lines.append(f"{i}. {zh_def}")
+        for entry in entries:
+            pos = entry.get("partOfSpeech", "")
+            seen_defs = set()
+            shown = 0
+            section_lines = []
+            for d in entry.get("definitions", []):
+                if shown >= 4:
+                    break
+                en_def = _strip_html(d.get("definition", ""))
+                # Wiktionary 的巢狀子義項常被拆成重複或空白的條目，佔位文字也跳過
+                if _is_stub_definition(en_def) or en_def in seen_defs:
+                    continue
+                seen_defs.add(en_def)
+                shown += 1
+                zh_def = _gtranslate(en_def)
+                section_lines.append(f"{shown}. {zh_def}")
                 if zh_def != en_def:
-                    lines.append(f"   ({en_def})")
-                if example:
-                    zh_ex = _gtranslate(example)
-                    lines.append(f"   例：{zh_ex}")
-                    if zh_ex != example:
-                        lines.append(f"      ({example})")
-            synonyms = meaning.get("synonyms", [])[:5]
-            if synonyms:
-                lines.append(f"   同義：{', '.join(synonyms)}")
-            antonyms = meaning.get("antonyms", [])[:5]
-            if antonyms:
-                lines.append(f"   反義：{', '.join(antonyms)}")
+                    section_lines.append(f"   ({en_def})")
+                for ex in d.get("examples", [])[:2]:
+                    ex_clean = _strip_html(ex)
+                    if not ex_clean:
+                        continue
+                    zh_ex = _gtranslate(ex_clean)
+                    section_lines.append(f"   例：{zh_ex}")
+                    if zh_ex != ex_clean:
+                        section_lines.append(f"      ({ex_clean})")
+            if section_lines:
+                lines.append(f"\n【{pos}】")
+                lines.extend(section_lines)
 
     return "\n".join(lines)
 

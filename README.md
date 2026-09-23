@@ -57,7 +57,7 @@ NVDA 啟動時會在背景自動檢查一次是否有新版本，若有才會跳
 | 來源 | 用途 |
 |---|---|
 | [萌典 API](https://www.moedict.tw/) | 中文字典（教育部授權資料） |
-| [Free Dictionary API](https://dictionaryapi.dev/) | 英文字典 |
+| [Wiktionary REST API](https://en.wiktionary.org/api/rest_v1/) | 英文字典（原用 Free Dictionary API，該服務長期無法連線後改用） |
 | Google Translate（非官方端點） | 英文定義翻譯為中文 |
 
 > **注意**：Google Translate 使用非官方免費端點，未來可能失效。
@@ -69,6 +69,7 @@ NVDA 啟動時會在背景自動檢查一次是否有新版本，若有才會跳
 - 萌典單字查詢需輸入至少兩個字；單一字元請選取後查詢（API 限制）
 - 豐富查詢的英文因需多次呼叫翻譯 API，回應時間較長
 - 離線時無法使用
+- 英文字典改用 Wiktionary 後，不再提供音標（IPA）與同義詞／反義詞
 
 ---
 
@@ -125,7 +126,7 @@ On NVDA startup, zhDict checks GitHub in the background for a newer release. A b
 | Source | Purpose |
 |---|---|
 | [moedict API](https://www.moedict.tw/) | Chinese dictionary (Ministry of Education licensed data) |
-| [Free Dictionary API](https://dictionaryapi.dev/) | English dictionary |
+| [Wiktionary REST API](https://en.wiktionary.org/api/rest_v1/) | English dictionary (switched from Free Dictionary API after it became persistently unreachable) |
 | Google Translate (unofficial endpoint) | Translates English definitions to Chinese |
 
 > **Note**: The Google Translate endpoint is unofficial and may stop working in the future.
@@ -137,6 +138,7 @@ On NVDA startup, zhDict checks GitHub in the background for a newer release. A b
 - moeDict requires at least two characters for lookup (API limitation)
 - Rich English lookup is slower due to multiple translation API calls
 - Requires internet access; no offline mode
+- English lookups no longer include IPA phonetics or synonyms/antonyms after the switch to Wiktionary
 
 ---
 
