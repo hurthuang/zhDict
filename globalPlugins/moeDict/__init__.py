@@ -445,10 +445,17 @@ def _wiktionary_page_info(title):
     info["zh_senses"] = _parse_zh_senses(text)
     return info
 
+_RE_POS_HEADING = re.compile(r'^={3,5}\s*([A-Za-z ]+?)\s*={3,5}\s*$', re.MULTILINE)
+
 def _parse_zh_senses(text):
-    """回傳 [(英文義項說明, [中文詞, ...]), ...]，只取有中文（Mandarin）翻譯的義項。"""
+    """回傳 [(詞性, 英文義項說明, [中文詞, ...]), ...]，只取有中文（Mandarin）翻譯的義項。
+    詞性是翻譯區塊前面最近的詞性標題（===Verb===），轉成中文；認不得的是空字串。"""
+    headings = [(m.start(), m.group(1).lower()) for m in _RE_POS_HEADING.finditer(text)
+                if m.group(1).lower() in _GDICT_POS]
     senses = []
-    for params, body in _RE_TRANS_BLOCK.findall(text):
+    for block in _RE_TRANS_BLOCK.finditer(text):
+        params, body = block.groups()
+        pos = next((p for start, p in reversed(headings) if start < block.start()), "")
         mandarin = [line for line in body.splitlines() if "Mandarin:" in line]
         terms = []
         for line in mandarin:
@@ -459,7 +466,7 @@ def _parse_zh_senses(text):
             continue
         # trans-top 可能帶 id= 之類的具名參數，義項說明是不含 = 的那個參數
         gloss = next((p for p in _flatten_templates(params).split('|') if '=' not in p), "")
-        senses.append((_clean_wikitext(gloss), terms))
+        senses.append((_GDICT_POS.get(pos, ""), _clean_wikitext(gloss), terms))
     return senses
 
 def _is_stub_definition(text):
@@ -521,7 +528,8 @@ _GDICT_POS = {
     "pronoun": "代名詞", "preposition": "介系詞", "conjunction": "連接詞",
     "interjection": "感嘆詞", "article": "冠詞", "abbreviation": "縮寫",
     "prefix": "字首", "suffix": "字尾", "phrase": "片語",
-    "auxiliary verb": "助動詞", "particle": "語助詞",
+    "auxiliary verb": "助動詞", "particle": "語助詞", "proper noun": "專有名詞",
+    "determiner": "限定詞", "numeral": "數詞",
 }
 
 def _is_common_word(word):
@@ -676,7 +684,7 @@ def _zh_meaning_lines(word, zh_word, zh_groups, senses, tr):
     if senses:
         lines.append("各義項中文：")
         listed = set()
-        for gloss, terms in senses:
+        for _pos, gloss, terms in senses:
             listed.update(terms)
             gloss = tr.get(gloss, gloss)
             # 用「：」不用括號：義項說明本身常以「（計算）」之類的領域標籤開頭
@@ -691,6 +699,30 @@ def _zh_meaning_lines(word, zh_word, zh_groups, senses, tr):
         lines.append("各詞性中文：")
         for pos_zh, words in zh_groups:
             lines.append(f"  {pos_zh}：{'、'.join(words)}")
+    return lines
+
+_ZH_PER_POS, _ZH_PER_SENSE = 8, 2
+
+def _zh_by_pos_lines(word, zh_word, zh_groups, senses):
+    """基本查詢用：只回答「中文是什麼」，依詞性分組列出中文詞，不附義項說明。
+    每個詞性先放 Wiktionary 逐義項的譯詞（照義項順序，品質較好），不足再用 Google 字典模式補，
+    同一詞性內不重複，最多 _ZH_PER_POS 個。詞性順序照 Wiktionary 頁面，Google 才有的詞性接在後面。"""
+    groups = {}
+    for pos, _gloss, terms in senses:
+        # 每個義項只取前 _ZH_PER_SENSE 個，免得一個冷門義項（run 的「衣物脫線」有四個譯詞）佔滿整行
+        groups.setdefault(pos, []).extend(terms[:_ZH_PER_SENSE])
+    for pos, words in zh_groups:
+        groups.setdefault(pos, []).extend(words)
+    lines = []
+    for pos, words in groups.items():
+        # Google 會給「你好!」這種帶標點的版本，去掉後和「你好」合併
+        words = (w.strip("!?！？。") for w in words)
+        words = list(dict.fromkeys(w for w in words if w and _is_common_word(w)))[:_ZH_PER_POS]
+        if words:
+            lines.append(f"{pos}：{'、'.join(words)}" if pos else "、".join(words))
+    # 主要譯詞通常已在詞性分組裡，不另列；沒有任何分組時（NASA → 美國太空總署）才單獨列出
+    if not lines and zh_word and zh_word.lower() != word.lower():
+        lines.append(zh_word)
     return lines
 
 def _basic_definition(entries):
@@ -766,30 +798,27 @@ def _fetch_english(word, rich=False):
         zh_word, zh_groups = f_gdict.result()
         info = f_info.result()
 
-    if rich:
-        sections = _rich_sections(entries)
-        syn, ant = info["syn"], info["ant"]
-        to_translate = [en for _, defs in sections for en, exs in defs for en in [en] + exs]
-        to_translate += syn + ant
-    else:
-        pos, en_def = _basic_definition(entries)
+    if not rich:
+        # 基本查詢只回答「中文是什麼」：依詞性列中文詞。完全沒有中文對應詞時才退回翻譯第一條釋義
+        zh_lines = _zh_by_pos_lines(word, zh_word, zh_groups, info["zh_senses"])
+        if zh_lines:
+            return "\n".join([word] + zh_lines)
+        _pos, en_def = _basic_definition(entries)
         if en_def is None:
             return f"「{word}」查無可用釋義。"
-        to_translate = [en_def]
-    to_translate += [gloss for gloss, _ in info["zh_senses"]]
+        return f"{word}\n釋義：{_gtranslate(en_def)}"
+
+    sections = _rich_sections(entries)
+    syn, ant = info["syn"], info["ant"]
+    to_translate = [en for _, defs in sections for en, exs in defs for en in [en] + exs]
+    to_translate += syn + ant
+    to_translate += [gloss for _, gloss, _ in info["zh_senses"]]
     tr = _gtranslate_many(to_translate)
 
     lines = [word]
-    # 音標只放豐富查詢，基本查詢保持精簡
-    if rich and info["ipa"]:
+    if info["ipa"]:
         lines.append(f"音標：{'、'.join(info['ipa'])}")
     lines.extend(_zh_meaning_lines(word, zh_word, zh_groups, info["zh_senses"], tr))
-
-    if not rich:
-        if pos:
-            lines.append(f"詞性：{pos}")
-        lines.append(f"釋義：{tr.get(en_def, en_def)}")
-        return "\n".join(lines)
 
     def with_zh(words):
         out = []
@@ -953,12 +982,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         ).start())
 
     @script(
-        description="基本查詢：中文查注音＋第一條釋義；英文查中文對應詞＋第一條釋義；整句直接翻譯",
+        description="基本查詢：中文查注音＋第一條釋義；英文依詞性列出中文對應詞；整句直接翻譯",
         category="國語字典與翻譯",
         gesture="kb:alt+NVDA+k",
     )
     def script_queryBasic(self, gesture):
-        """基本查詢：中文查注音＋第一條釋義；英文查中文對應詞＋第一條釋義；整句直接翻譯"""
+        """基本查詢：中文查注音＋第一條釋義；英文依詞性列出中文對應詞；整句直接翻譯"""
         self._query(rich=False)
 
     @script(
