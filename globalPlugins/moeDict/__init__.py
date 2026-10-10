@@ -558,7 +558,10 @@ def _gdict(word):
     groups = []
     try:
         for pos_entry in raw[1] or []:
-            words = [w for w in pos_entry[1] if w and _is_common_word(w)]
+            # 單字多半是古文用字或詞的片段（present 的「斯、儀、今」），不列；常用的單字 Wiktionary 會給。
+            # 偶有簡體混入（瞄准），轉成繁體；「你好!」這種帶標點的去掉標點
+            words = (_to_traditional(w).strip("!?！？。") for w in pos_entry[1] if w)
+            words = list(dict.fromkeys(w for w in words if len(w) > 1 and _is_common_word(w)))
             if words:
                 groups.append((_GDICT_POS.get(pos_entry[0], pos_entry[0]), words))
     except (IndexError, TypeError):
@@ -596,7 +599,7 @@ def _fetch_moedict(word, rich=False):
         if e.code == 404:
             # 萌典沒收的新詞、專有名詞（例如人工智慧），至少給個英文翻譯
             en = _gtranslate(word, tl="en") if len(word) > 1 else word
-            return f"「{word}」查無此詞。" + (f"\n\n英文翻譯：{en}" if en != word else "")
+            return f"「{word}」查無此詞。" + (f"\n英文翻譯：{en}" if en != word else "")
         raise
     with resp_cm as resp:
         raw = resp.read()
@@ -715,9 +718,7 @@ def _zh_by_pos_lines(word, zh_word, zh_groups, senses):
         groups.setdefault(pos, []).extend(words)
     lines = []
     for pos, words in groups.items():
-        # Google 會給「你好!」這種帶標點的版本，去掉後和「你好」合併
-        words = (w.strip("!?！？。") for w in words)
-        words = list(dict.fromkeys(w for w in words if w and _is_common_word(w)))[:_ZH_PER_POS]
+        words = list(dict.fromkeys(w for w in words if _is_common_word(w)))[:_ZH_PER_POS]
         if words:
             lines.append(f"{pos}：{'、'.join(words)}" if pos else "、".join(words))
     # 主要譯詞通常已在詞性分組裡，不另列；沒有任何分組時（NASA → 美國太空總署）才單獨列出
@@ -862,7 +863,7 @@ def _translate_text(text):
     translated = _gtranslate(text, tl="en" if to_english else "zh-TW")
     if translated == text:
         return "翻譯失敗，可能是翻譯服務暫時無法連線，請稍後再試。"
-    return f"原文：{text}\n\n{'英文' if to_english else '中文'}：{translated}"
+    return f"原文：{text}\n{'英文' if to_english else '中文'}：{translated}"
 
 # ── 檢查更新 ──────────────────────────────────────────────
 def _parse_version(v):
