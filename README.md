@@ -38,8 +38,8 @@ zhDict 是一個 [NVDA](https://www.nvaccess.org/) 螢幕閱讀器的附加元�
 
 | 熱鍵 | 功能 |
 |---|---|
-| `Alt + NVDA + K` | **基本查詢**：注音 + 第一條釋義（中文）；音標 + 中文對應詞 + 第一條釋義（英文） |
-| `Alt + Shift + NVDA + K` | **豐富查詢**：完整字典內容，含所有義項、例句、引文、似義詞／同反義詞 |
+| `Alt + NVDA + K` | **基本查詢**：注音 + 第一條釋義（中文）；中文對應詞 + 第一條釋義（英文） |
+| `Alt + Shift + NVDA + K` | **豐富查詢**：完整字典內容，含所有義項、例句、引文、似義詞；英文另含音標、同反義詞 |
 
 **使用步驟：**
 1. 在任何應用程式中選取要查詢的文字（或先 `Ctrl+C` 複製）
@@ -117,8 +117,8 @@ Language is detected automatically — no manual switching needed.
 
 | Hotkey | Function |
 |---|---|
-| `Alt + NVDA + K` | **Basic lookup**: phonetics + first definition (Chinese); IPA + Chinese equivalents + first definition (English) |
-| `Alt + Shift + NVDA + K` | **Rich lookup**: full dictionary content with all senses, examples, quotations, and synonyms/antonyms |
+| `Alt + NVDA + K` | **Basic lookup**: phonetics + first definition (Chinese); Chinese equivalents + first definition (English) |
+| `Alt + Shift + NVDA + K` | **Rich lookup**: full dictionary content with all senses, examples, quotations, and synonyms; English also adds IPA and synonyms/antonyms |
 
 **Steps:**
 1. Select text in any application (or copy with `Ctrl+C`)

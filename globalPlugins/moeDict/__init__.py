@@ -598,7 +598,7 @@ def _fetch_moedict(word, rich=False):
         data = json.loads(raw.decode("utf-8"))
 
     entries = data if isinstance(data, list) else [data]
-    lines = [f"【{word}】"]
+    lines = [word]
     seen_defs = set()
 
     for entry in entries:
@@ -607,7 +607,8 @@ def _fetch_moedict(word, rich=False):
         for het in entry.get("h", []):
             if not isinstance(het, dict):
                 continue
-            bopomofo = _strip_pinyin(het.get("p", ""))
+            # 萌典的注音在 b，p 是漢語拼音
+            bopomofo = _clean_type(het.get("b", "")) or _strip_pinyin(het.get("p", ""))
             het_lines = []
             if bopomofo:
                 het_lines.append(f"注音：{bopomofo}")
@@ -625,23 +626,14 @@ def _fetch_moedict(word, rich=False):
                 het_lines.append(f"{d_idx}. {pos_label}{f}")
 
                 if rich:
-                    q_val = d.get("q")
-                    if isinstance(q_val, list):
-                        for q in q_val:
-                            s = q if isinstance(q, str) else (q.get("f", "") if isinstance(q, dict) else "")
+                    # 萌典的 e 是例句，本身已帶「如：」開頭；q 是古籍引文。順序照萌典網站：先例句後引文
+                    for key, label in (("e", ""), ("q", "引：")):
+                        val = d.get(key)
+                        items = val if isinstance(val, list) else [val] if isinstance(val, str) else []
+                        for item in items:
+                            s = item if isinstance(item, str) else (item.get("f", "") if isinstance(item, dict) else "")
                             if s:
-                                het_lines.append(f"  如：{_clean(s)}")
-                    elif isinstance(q_val, str) and q_val:
-                        het_lines.append(f"  如：{_clean(q_val)}")
-
-                    e_val = d.get("e")
-                    if isinstance(e_val, list):
-                        for e in e_val:
-                            s = e if isinstance(e, str) else (e.get("f", "") if isinstance(e, dict) else "")
-                            if s:
-                                het_lines.append(f"  引：{_clean(s)}")
-                    elif isinstance(e_val, str) and e_val:
-                        het_lines.append(f"  引：{_clean(e_val)}")
+                                het_lines.append(f"  {label}{_clean(s)}")
 
                     l = d.get("l", "")
                     if isinstance(l, str) and l.strip():
@@ -655,7 +647,7 @@ def _fetch_moedict(word, rich=False):
             lines.append("")
 
     result = "\n".join(lines).strip()
-    return result if len(result) > len(f"【{word}】") else f"「{word}」查無結果。"
+    return result if len(result) > len(word) else f"「{word}」查無結果。"
 
 # ── 英文字典查詢（Wiktionary，Free Dictionary API 長期無法連線後改用）──
 def _wiktionary_entries(word):
@@ -787,8 +779,9 @@ def _fetch_english(word, rich=False):
     to_translate += [gloss for gloss, _ in info["zh_senses"]]
     tr = _gtranslate_many(to_translate)
 
-    lines = [f"【{word}】"]
-    if info["ipa"]:
+    lines = [word]
+    # 音標只放豐富查詢，基本查詢保持精簡
+    if rich and info["ipa"]:
         lines.append(f"音標：{'、'.join(info['ipa'])}")
     lines.extend(_zh_meaning_lines(word, zh_word, zh_groups, info["zh_senses"], tr))
 
@@ -810,7 +803,7 @@ def _fetch_english(word, rich=False):
         lines.append(f"反義詞：{with_zh(ant)}")
 
     for pos, defs in sections:
-        lines.append(f"\n【{pos}】")
+        lines.append(f"\n{pos}")
         for i, (en_def, examples) in enumerate(defs, 1):
             zh_def = tr.get(en_def, en_def)
             lines.append(f"{i}. {zh_def}")
@@ -960,21 +953,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         ).start())
 
     @script(
-        description="基本查詢：中文查注音＋第一條釋義；英文查音標＋中文對應詞＋第一條釋義；整句直接翻譯",
+        description="基本查詢：中文查注音＋第一條釋義；英文查中文對應詞＋第一條釋義；整句直接翻譯",
         category="國語字典與翻譯",
         gesture="kb:alt+NVDA+k",
     )
     def script_queryBasic(self, gesture):
-        """基本查詢：中文查注音＋第一條釋義；英文查音標＋中文對應詞＋第一條釋義；整句直接翻譯"""
+        """基本查詢：中文查注音＋第一條釋義；英文查中文對應詞＋第一條釋義；整句直接翻譯"""
         self._query(rich=False)
 
     @script(
-        description="豐富查詢：中文查完整字典；英文查完整字典含例句、同反義詞；整句直接翻譯",
+        description="豐富查詢：中文查完整字典；英文查完整字典含音標、例句、同反義詞；整句直接翻譯",
         category="國語字典與翻譯",
         gesture="kb:alt+shift+NVDA+k",
     )
     def script_queryRich(self, gesture):
-        """豐富查詢：中文查完整字典；英文查完整字典含例句、同反義詞；整句直接翻譯"""
+        """豐富查詢：中文查完整字典；英文查完整字典含音標、例句、同反義詞；整句直接翻譯"""
         self._query(rich=True)
 
     def _query(self, rich):
