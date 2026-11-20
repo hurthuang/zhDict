@@ -590,6 +590,66 @@ def _spell_suggest(word):
 
 
 # ── 萌典中文查詢 ──────────────────────────────────────────
+# ── 相關詞語（同一個字的常用詞，幫助分辨同音字）────────────
+# related_words.txt 由 tools/build_related_words.js 產生：每行「字<TAB>本音<TAB>詞 詞 詞…」，
+# 詞照常用程度排序，只收這個字讀本音的詞（小麥注音詞庫的常用程度 × 萌典詞目）。
+_RELATED_FILE = os.path.join(os.path.dirname(__file__), "related_words.txt")
+_related_cache = None
+_RELATED_SINGLE = (8, 30)  # 查單字時列幾個詞：（基本、豐富）
+_RELATED_PER_CHAR = (5, 15)  # 查詞時每個字列幾個詞
+_RE_TONE = re.compile(r"[ˊˇˋ˙]")
+_RE_BPMF_SYL = re.compile(r"[ㄅ-ㄩˊˇˋ˙]+")
+
+def _related_words():
+    global _related_cache
+    if _related_cache is None:
+        data = {}
+        try:
+            with open(_RELATED_FILE, encoding="utf-8") as f:
+                for line in f:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) == 3:
+                        data[parts[0]] = (parts[1], parts[2].split(" "))
+        except OSError:
+            pass
+        _related_cache = data
+    return _related_cache
+
+def _same_reading(ch, r, main):
+    # 輕聲、「一」「不」變調都算同一個音
+    r = r.replace("˙", "")
+    if r == main:
+        return True
+    return _RE_TONE.sub("", r) == _RE_TONE.sub("", main) and ch in "一不"
+
+def _related_lines(word, rich, bopomofo="", polyphone=False):
+    data = _related_words()
+    chars = [c for c in word if _is_chinese(c)]
+    syls = _RE_BPMF_SYL.findall(bopomofo)
+    if len(syls) != len(chars):
+        syls = []  # 兒化等讀音對不上字數時不比對讀音
+    if len(chars) == 1:
+        entry = data.get(chars[0])
+        if not entry:
+            return []
+        main, words = entry
+        words = words[:_RELATED_SINGLE[1 if rich else 0]]
+        label = f"詞語（{main}）" if polyphone else "詞語"
+        return [f"{label}：{'、'.join(words)}"]
+    lines, seen = [], set()
+    for i, ch in enumerate(chars):
+        if ch in seen or ch not in data:
+            continue
+        seen.add(ch)
+        main, words = data[ch]
+        # 這個字在詞裡不是讀本音（例如「銀行」的行），列出的本音詞語反而會混淆，略過
+        if syls and not _same_reading(ch, syls[i], main):
+            continue
+        words = [w for w in words if word not in w][:_RELATED_PER_CHAR[1 if rich else 0]]
+        if words:
+            lines.append(f"{ch}：{'、'.join(words)}")
+    return lines
+
 def _fetch_moedict(word, rich=False):
     url = MOEDICT_API.format(urllib.parse.quote(word, safe=""))
     req = urllib.request.Request(url, headers=_BROWSER_HEADERS)
@@ -599,7 +659,12 @@ def _fetch_moedict(word, rich=False):
         if e.code == 404:
             # 萌典沒收的新詞、專有名詞（例如人工智慧），至少給個英文翻譯
             en = _gtranslate(word, tl="en") if len(word) > 1 else word
-            return f"「{word}」查無此詞。" + (f"\n英文翻譯：{en}" if en != word else "")
+            lines = [f"「{word}」查無此詞。"] + ([f"英文翻譯：{en}"] if en != word else [])
+            # 打錯同音字時（例如「在見」）各字的常用詞可以幫忙找出正確的字
+            related = _related_lines(word, rich)
+            if related:
+                lines += ["", "相關詞語"] + related
+            return "\n".join(lines)
         raise
     with resp_cm as resp:
         raw = resp.read()
@@ -611,6 +676,7 @@ def _fetch_moedict(word, rich=False):
     entries = data if isinstance(data, list) else [data]
     lines = [word]
     seen_defs = set()
+    readings = []  # 各讀音的注音，給相關詞語判斷破音字、詞裡的讀音
 
     for entry in entries:
         if not isinstance(entry, dict):
@@ -623,6 +689,7 @@ def _fetch_moedict(word, rich=False):
             het_lines = []
             if bopomofo:
                 het_lines.append(f"注音：{bopomofo}")
+                readings.append(bopomofo)
 
             defs = het.get("d", [])
             if not rich:
@@ -656,6 +723,18 @@ def _fetch_moedict(word, rich=False):
             seen_defs.add(key)
             lines.extend(het_lines)
             lines.append("")
+
+    if len(lines) > 1:
+        bases = {"".join(_RE_BPMF_SYL.findall(r)).replace("˙", "") for r in readings}
+        related = _related_lines(
+            word, rich,
+            bopomofo=readings[0] if readings else "",
+            polyphone=len(bases) > 1,
+        )
+        if related:
+            if len(related) > 1 or not related[0].startswith("詞語"):
+                lines.append("相關詞語")
+            lines.extend(related)
 
     result = "\n".join(lines).strip()
     return result if len(result) > len(word) else f"「{word}」查無結果。"
