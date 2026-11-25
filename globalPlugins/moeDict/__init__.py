@@ -83,8 +83,9 @@ def _font_size():
 
 class ResultDialog(wx.Dialog):
 
-    def __init__(self, parent, title, message):
+    def __init__(self, parent, title, message, rich=False):
         super().__init__(parent, title=title, style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.rich = rich
         self.text = wx.TextCtrl(self, value=message, style=wx.TE_MULTILINE | wx.TE_READONLY)
         # 縮放與配色都有快捷鍵，按鈕是給用滑鼠的低視力使用者看得到、點得到
         buttons = wx.BoxSizer(wx.HORIZONTAL)
@@ -122,6 +123,7 @@ class ResultDialog(wx.Dialog):
         self.fontSize = _font_size()
         self._applyFont()
         self.text.Bind(wx.EVT_MOUSEWHEEL, self.onMouseWheel)
+        self.text.Bind(wx.EVT_LEFT_DCLICK, self.onDoubleClick)
         self.Bind(wx.EVT_CHAR_HOOK, self.onCharHook)
         self.Bind(wx.EVT_CLOSE, self.onClose)
         self.text.SetInsertionPoint(0)
@@ -191,11 +193,78 @@ class ResultDialog(wx.Dialog):
             if key == ord("T"):
                 self._cycleTheme()
                 return
+        if (key in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER) and not evt.ControlDown() and not evt.AltDown()
+                and self.FindFocus() is self.text):
+            self._chooseWord(rich=self.rich or evt.ShiftDown())
+            return
         evt.Skip()
 
-def _show_result(message, title):
+    # ── 查結果裡的詞 ──
+    # 游標所在那一行的詞：「朝：朝氣蓬勃、朝會」「詞語：……」這類詞語行用「、」分開的詞，
+    # 加上「」框住的短詞（釋義裡的「也作『暮想朝思』」）。回傳 [(詞, 在這一行的起點, 終點)]。
+    def _caretLine(self):
+        value = self.text.GetValue()
+        # Windows 多行文字框的位置把換行算兩個字元，用 GetRange 的長度換成字串索引
+        idx = len(self.text.GetRange(0, self.text.GetInsertionPoint()))
+        start = value.rfind("\n", 0, idx) + 1
+        end = value.find("\n", idx)
+        if end < 0:
+            end = len(value)
+        return value[start:end], idx - start
+
+    def _lineWords(self, line):
+        words = []
+        m = _RE_RELATED_LINE.match(line)
+        if m:
+            pos = m.start(2)
+            for w in m.group(2).split("、"):
+                if w.strip() and all(_is_chinese(c) for c in w.strip()):
+                    words.append((w.strip(), pos, pos + len(w)))
+                pos += len(w) + 1
+        for q in _RE_QUOTED_WORD.finditer(line):
+            if not any(q.group(1) == w for w, _, _ in words):
+                words.append((q.group(1), q.start(1), q.end(1)))
+        words.sort(key=lambda x: x[1])
+        return words
+
+    def _chooseWord(self, rich):
+        line, col = self._caretLine()
+        words = self._lineWords(line)
+        if not words:
+            ui.message("這一行沒有可以查的詞語")
+            return
+        names = [w for w, _, _ in words]
+        if len(names) == 1:
+            self._lookup(names[0], rich)
+            return
+        current = next((i for i, (_, s, e) in enumerate(words) if s <= col <= e), 0)
+        with wx.SingleChoiceDialog(self, "選擇要查的詞語", "查詞語", names) as dlg:
+            dlg.SetSelection(current)
+            if dlg.ShowModal() == wx.ID_OK:
+                self._lookup(names[dlg.GetSelection()], rich)
+
+    def onDoubleClick(self, evt):
+        evt.Skip()
+        wx.CallAfter(self._lookupAtCaret)
+
+    def _lookupAtCaret(self):
+        if not self:
+            return
+        line, col = self._caretLine()
+        word = next((w for w, s, e in self._lineWords(line) if s <= col <= e), None)
+        if word:
+            self._lookup(word, self.rich)
+
+    def _lookup(self, word, rich):
+        ui.message(f"查詢：{word}")
+        threading.Thread(target=_query_worker, args=(word, rich, self), daemon=True).start()
+
+def _show_result(message, title, rich=False, parent=None):
+    # 從結果視窗查詞語時，新視窗疊在原視窗上面，按 Esc 關掉就回到原視窗
+    if not parent:  # 沒有或已經關掉（wx 物件刪掉後是 False）
+        parent = gui.mainFrame
     gui.mainFrame.prePopup()
-    dlg = ResultDialog(gui.mainFrame, title, message)
+    dlg = ResultDialog(parent, title, message, rich)
     dlg.Show()
     gui.mainFrame.postPopup()
     dlg.Raise()
@@ -591,14 +660,21 @@ def _spell_suggest(word):
 
 # ── 萌典中文查詢 ──────────────────────────────────────────
 # ── 相關詞語（同一個字的常用詞，幫助分辨同音字）────────────
-# related_words.txt 由 tools/build_related_words.js 產生：每行「字<TAB>本音<TAB>詞 詞 詞…」，
-# 詞照常用程度排序，只收這個字讀本音的詞（小麥注音詞庫的常用程度 × 萌典詞目）。
+# 先列 NVDA 內建字詞解釋的詞（人工挑選，照原樣、不管讀音），再用 related_words.txt 補足。
+# related_words.txt 由 tools/build_related_words.js 產生：每個字每個讀音一行「字<TAB>讀音<TAB>詞 詞 詞…」，
+# 同一個字第一行是本音；詞照常用程度排序（小麥注音詞庫的常用程度 × 萌典詞目）。
+# 查單字列本音的詞；查詞時列跟這個字在詞裡同一個讀音的詞（例如「銀行」的行列 ㄏㄤˊ：行業、行情）。
 _RELATED_FILE = os.path.join(os.path.dirname(__file__), "related_words.txt")
 _related_cache = None
-_RELATED_SINGLE = (8, 30)  # 查單字時列幾個詞：（基本、豐富）
-_RELATED_PER_CHAR = (5, 15)  # 查詞時每個字列幾個詞
+# NVDA 字詞解釋的詞全部列，再補幾個 NVDA 沒有的詞：（基本、豐富）
+_RELATED_SINGLE = (10, 30)  # 查單字
+_RELATED_PER_CHAR = (5, 15)  # 查詞時每個字
+_NVDA_DESC_LOCALE = "zh_TW"  # 不管 NVDA 介面語言，都用繁體中文的字詞解釋
 _RE_TONE = re.compile(r"[ˊˇˋ˙]")
 _RE_BPMF_SYL = re.compile(r"[ㄅ-ㄩˊˇˋ˙]+")
+# 結果視窗按 Enter 查詞：詞語行（「詞語：」或「朝：」開頭）與「」框住的短詞
+_RE_RELATED_LINE = re.compile(r"^\s*(詞語|[㐀-鿿豈-﫿])：(.+)$")
+_RE_QUOTED_WORD = re.compile(r"「([㐀-鿿豈-﫿]{2,8})」")
 
 def _related_words():
     global _related_cache
@@ -609,7 +685,7 @@ def _related_words():
                 for line in f:
                     parts = line.rstrip("\n").split("\t")
                     if len(parts) == 3:
-                        data[parts[0]] = (parts[1], parts[2].split(" "))
+                        data.setdefault(parts[0], []).append((parts[1], parts[2].split(" ")))
         except OSError:
             pass
         _related_cache = data
@@ -622,33 +698,84 @@ def _same_reading(ch, r, main):
         return True
     return _RE_TONE.sub("", r) == _RE_TONE.sub("", main) and ch in "一不"
 
-def _related_lines(word, rich, bopomofo="", polyphone=False):
+def _nvda_description(ch):
+    """NVDA 內建字詞解釋 → (詞語清單, 字形說明)。最後一欄括號包起來的是字形說明。"""
+    try:
+        import characterProcessing
+        items = characterProcessing.getCharacterDescription(_NVDA_DESC_LOCALE, ch) or []
+    except Exception:
+        items = []
+    words, shape = [], ""
+    for item in items:
+        item = item.strip()
+        if len(item) > 1 and item[0] in "(（" and item[-1] in ")）":
+            shape = item[1:-1].strip()
+        elif item:
+            words.append(item)
+    return words, shape
+
+def _merge_words(nvda_words, ours, exclude="", extra=10):
+    """NVDA 的詞全部留，再補 extra 個 NVDA 沒有的詞。"""
+    out = []
+    for w in nvda_words:
+        if w not in out and not (exclude and exclude in w):
+            out.append(w)
+    added = 0
+    for w in ours:
+        if added >= extra:
+            break
+        if w not in out and not (exclude and exclude in w):
+            out.append(w)
+            added += 1
+    return out
+
+def _related_lines(word, rich, bopomofo=""):
     data = _related_words()
     chars = [c for c in word if _is_chinese(c)]
     syls = _RE_BPMF_SYL.findall(bopomofo)
     if len(syls) != len(chars):
         syls = []  # 兒化等讀音對不上字數時不比對讀音
     if len(chars) == 1:
-        entry = data.get(chars[0])
-        if not entry:
-            return []
-        main, words = entry
-        words = words[:_RELATED_SINGLE[1 if rich else 0]]
-        label = f"詞語（{main}）" if polyphone else "詞語"
-        return [f"{label}：{'、'.join(words)}"]
+        ch = chars[0]
+        nvda_words, shape = _nvda_description(ch)
+        ours = data[ch][0][1] if ch in data else []
+        words = _merge_words(nvda_words, ours, extra=_RELATED_SINGLE[1 if rich else 0])
+        lines = [f"詞語：{'、'.join(words)}"] if words else []
+        if shape:
+            lines.append(f"字形：{shape}")
+        return lines
     lines, seen = [], set()
     for i, ch in enumerate(chars):
-        if ch in seen or ch not in data:
+        if ch in seen:
             continue
         seen.add(ch)
-        main, words = data[ch]
-        # 這個字在詞裡不是讀本音（例如「銀行」的行），列出的本音詞語反而會混淆，略過
-        if syls and not _same_reading(ch, syls[i], main):
-            continue
-        words = [w for w in words if word not in w][:_RELATED_PER_CHAR[1 if rich else 0]]
+        nvda_words, shape = _nvda_description(ch)
+        entries = data.get(ch, [])
+        ours = entries[0][1] if entries else []
+        if syls and entries:
+            # 只列跟這個字在詞裡同一個讀音的詞（例如「銀行」的行只列讀 ㄏㄤˊ 的）。
+            same = next((ws for r, ws in entries if _same_reading(ch, syls[i], r)), [])
+            ours = same
+            if len(entries) > 1:
+                # 破音字：NVDA 的詞沒有標讀音，在同一個讀音的清單裡查得到才留
+                # （查不到讀音的詞，例如「一行字」，不留）。只有一個讀音的字全部留（暮色低垂）。
+                same_set = set(same)
+                nvda_words = [w for w in nvda_words if w in same_set]
+        words = _merge_words(nvda_words, ours, exclude=word,
+                             extra=_RELATED_PER_CHAR[1 if rich else 0])
         if words:
             lines.append(f"{ch}：{'、'.join(words)}")
+            if rich and shape:
+                lines.append(f"  字形：{shape}")
     return lines
+
+def _related_block(related):
+    # 查詞時各字一行，前面加標題；查單字只有「詞語：」「字形：」，不加標題
+    if not related:
+        return []
+    if related[0].startswith("詞語：") or related[0].startswith("字形："):
+        return related
+    return ["相關詞語"] + related
 
 def _fetch_moedict(word, rich=False):
     url = MOEDICT_API.format(urllib.parse.quote(word, safe=""))
@@ -661,9 +788,9 @@ def _fetch_moedict(word, rich=False):
             en = _gtranslate(word, tl="en") if len(word) > 1 else word
             lines = [f"「{word}」查無此詞。"] + ([f"英文翻譯：{en}"] if en != word else [])
             # 打錯同音字時（例如「在見」）各字的常用詞可以幫忙找出正確的字
-            related = _related_lines(word, rich)
+            related = _related_block(_related_lines(word, rich))
             if related:
-                lines += ["", "相關詞語"] + related
+                lines += [""] + related
             return "\n".join(lines)
         raise
     with resp_cm as resp:
@@ -676,7 +803,7 @@ def _fetch_moedict(word, rich=False):
     entries = data if isinstance(data, list) else [data]
     lines = [word]
     seen_defs = set()
-    readings = []  # 各讀音的注音，給相關詞語判斷破音字、詞裡的讀音
+    readings = []  # 各讀音的注音；第一個給相關詞語判斷字在詞裡讀不讀本音
 
     for entry in entries:
         if not isinstance(entry, dict):
@@ -725,16 +852,9 @@ def _fetch_moedict(word, rich=False):
             lines.append("")
 
     if len(lines) > 1:
-        bases = {"".join(_RE_BPMF_SYL.findall(r)).replace("˙", "") for r in readings}
-        related = _related_lines(
-            word, rich,
-            bopomofo=readings[0] if readings else "",
-            polyphone=len(bases) > 1,
-        )
-        if related:
-            if len(related) > 1 or not related[0].startswith("詞語"):
-                lines.append("相關詞語")
-            lines.extend(related)
+        lines.extend(_related_block(
+            _related_lines(word, rich, bopomofo=readings[0] if readings else "")
+        ))
 
     result = "\n".join(lines).strip()
     return result if len(result) > len(word) else f"「{word}」查無結果。"
@@ -1023,7 +1143,7 @@ def _download_and_install_worker(asset_url):
     wx.CallAfter(os.startfile, tmp_path)
 
 # ── 背景查詢 ──────────────────────────────────────────────
-def _query_worker(word, rich):
+def _query_worker(word, rich, parent=None):
     is_zh = _is_chinese(word)
     source = "國語字典" if is_zh else "英文字典"
     try:
@@ -1047,7 +1167,7 @@ def _query_worker(word, rich):
         result = f"發生錯誤：{e}"
         title = "查詢失敗"
 
-    wx.CallAfter(_show_result, result, title)
+    wx.CallAfter(_show_result, result, title, rich, parent)
 
 # ── GlobalPlugin ──────────────────────────────────────────
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):

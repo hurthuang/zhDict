@@ -18,7 +18,7 @@ if (!mcDir || !indexPath) {
   process.exit(1);
 }
 
-const PER_CHAR = 40; // 每個字最多存幾個詞
+const PER_CHAR = 0; // 每個字每個讀音最多存幾個詞；0 表示全部
 const MIN_LEN = 2;
 const MAX_LEN = 4;
 const SANDHI = new Set(["一", "不"]);
@@ -82,6 +82,28 @@ for (const [key, value] of pairs) {
   }
 }
 
+// 兩個讀音意思不同、學生容易想成另一個意思的詞（明朝：明代 ㄔㄠˊ／明天早上 ㄓㄠ）→ 這個字的詞語不列。
+// 手動挑：萌典把又音也分成不同條目（揭露、什麼、耳朵），自動判斷會誤刪幾百個常用詞。
+const AMBIGUOUS = {
+  朝: "明朝 朝陽 朝日 在朝 三朝",
+  行: "一行 同行 行行 五行 行商 直行 畫行 行頭",
+  便: "便宜 便宜行事",
+  倒: "倒車 傾倒",
+  差: "公差",
+  好: "好學",
+  重: "重讀",
+  處: "難處",
+  當: "不當",
+  省: "省事",
+  中: "不中 不中用",
+  分: "等分",
+  號: "呼號",
+};
+const ambiguous = new Set(Object.entries(AMBIGUOUS).flatMap(([ch, ws]) => ws.split(" ").map((w) => ch + w)));
+function ambiguousAt(w, i) {
+  return ambiguous.has([...w][i] + w);
+}
+
 // 本音：單字常用程度最高的讀音（小麥注音的分數是 log10 機率）。
 // 最高分有兩個以上讀音同分（例如「了」）時，看哪個音在詞裡比較常用（依詞的常用程度加權，輕聲併到同一個音）。
 // 小麥注音資料明顯不對的字在 OVERRIDE 指定。
@@ -119,31 +141,42 @@ for (const ch of new Set([...charReadings.keys(), ...weight.keys()])) {
   mainReading.set(ch, main);
 }
 
-function isMain(ch, r) {
+// 詞裡這個字的讀音歸到哪一份清單：輕聲併到同一個音（本音優先），「一」「不」變調都算本音
+function readingKey(ch, r) {
   const main = mainReading.get(ch);
-  if (!main) return false;
-  if (r === main) return true;
-  if (base(r) !== base(main)) return false;
-  return r.includes("˙") || SANDHI.has(ch);
+  const plain = r.replace("˙", "");
+  if (main && (plain === main || (base(r) === base(main) && (r.includes("˙") || SANDHI.has(ch))))) return main;
+  return plain;
 }
 
-const byChar = new Map(); // 字 → [[詞, 分數]]
+const byChar = new Map(); // 字 → Map(讀音 → [[詞, 分數]])
 for (const [w, { score, readings }] of words) {
-  const chars = [...w];
   const seen = new Set();
-  chars.forEach((ch, i) => {
-    if (seen.has(ch) || !isMain(ch, readings[i])) return;
-    seen.add(ch);
-    const list = byChar.get(ch) || [];
+  [...w].forEach((ch, i) => {
+    const key = readingKey(ch, readings[i]);
+    if (seen.has(ch + key) || ambiguousAt(w, i)) return;
+    seen.add(ch + key);
+    const m = byChar.get(ch) || new Map();
+    const list = m.get(key) || [];
     list.push([w, score]);
-    byChar.set(ch, list);
+    m.set(key, list);
+    byChar.set(ch, m);
   });
 }
 
+// 每個字每個讀音一行：「字<TAB>讀音<TAB>詞 詞 詞…」。同一個字第一行是本音，其他讀音照常用程度排。
+// 詞全部存（不截斷），查詞時才能確定 NVDA 字詞解釋的詞是不是同一個讀音。
 const lines = [];
+const total = (list) => list.reduce((s, x) => s + Math.pow(10, x[1]), 0);
 for (const ch of [...byChar.keys()].sort()) {
-  const list = byChar.get(ch).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  lines.push(ch + "\t" + mainReading.get(ch) + "\t" + list.slice(0, PER_CHAR).map((x) => x[0]).join(" "));
+  const m = byChar.get(ch);
+  const main = mainReading.get(ch);
+  const keys = [...m.keys()].sort((a, b) => (b === main) - (a === main) || total(m.get(b)) - total(m.get(a)));
+  for (const key of keys) {
+    const list = m.get(key).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const cap = PER_CHAR > 0 ? list.slice(0, PER_CHAR) : list;
+    lines.push(ch + "\t" + key + "\t" + cap.map((x) => x[0]).join(" "));
+  }
 }
 
 const out = path.resolve(__dirname, "../globalPlugins/moeDict/related_words.txt");
